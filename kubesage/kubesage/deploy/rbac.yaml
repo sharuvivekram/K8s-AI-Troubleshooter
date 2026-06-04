@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubesage
+  namespace: default
+---
+# Read-only access to the resources KubeSage inspects. Least privilege:
+# it can read pods, events, and logs but cannot modify anything.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubesage-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubesage-reader-binding
+subjects:
+  - kind: ServiceAccount
+    name: kubesage
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: kubesage-reader
+  apiGroup: rbac.authorization.k8s.io

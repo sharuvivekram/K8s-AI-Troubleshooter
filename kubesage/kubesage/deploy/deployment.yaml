@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubesage
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: kubesage }
+  template:
+    metadata:
+      labels: { app: kubesage }
+    spec:
+      serviceAccountName: kubesage
+      containers:
+        - name: kubesage
+          # Local (kind): kubesage:dev   |   AWS: <acct>.dkr.ecr.<region>.amazonaws.com/kubesage:latest
+          image: kubesage:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 8000
+          env:
+            - name: WATCH_NAMESPACES
+              value: "default"
+            - name: AI_PROVIDER
+              value: "anthropic"          # or "bedrock" on AWS
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: kubesage-secrets, key: anthropic-api-key, optional: true }
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef: { name: kubesage-secrets, key: slack-webhook, optional: true }
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits:   { cpu: "250m", memory: "256Mi" }

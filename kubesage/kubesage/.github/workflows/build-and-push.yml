@@ -1,0 +1,36 @@
+name: build-and-push
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # for OIDC auth to AWS (no long-lived keys)
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Authenticate to AWS via OIDC. Create the role + trust policy in IAM and
+      # put its ARN in the AWS_ROLE_ARN repository secret.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE: kubesage
+        run: |
+          docker build -t "$REGISTRY/$IMAGE:${GITHUB_SHA::7}" -t "$REGISTRY/$IMAGE:latest" .
+          docker push "$REGISTRY/$IMAGE:${GITHUB_SHA::7}"
+          docker push "$REGISTRY/$IMAGE:latest"

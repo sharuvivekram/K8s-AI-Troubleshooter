@@ -1,0 +1,131 @@
+# KubeSage — AI Kubernetes Troubleshooter
+
+When a pod fails, KubeSage gathers the same context an on-call engineer would
+(pod status, events, logs), sends it to Claude for a root-cause analysis with a
+suggested fix, and posts the result to your terminal, Slack, or AWS SNS.
+
+It runs **free on a local cluster** for development and demos, and deploys to
+**AWS EKS** with a single Terraform apply when you want the cloud story.
+
+```mermaid
+flowchart LR
+  A[EKS / kind cluster<br/>failing pods] --> B[KubeSage agent<br/>collects logs + events]
+  B --> C[Claude<br/>API or AWS Bedrock]
+  C --> D[Alert<br/>console / Slack / SNS]
+```
+
+Tech: Python · Kubernetes · Docker · Claude (Anthropic API + AWS Bedrock) ·
+Terraform · Amazon EKS / ECR / SNS · GitHub Actions.
+
+---
+
+## Part A — Run it locally (free, ~20 min)
+
+You need: Docker, `kubectl`, [`kind`](https://kind.sigs.k8s.io/), and a Claude
+API key from https://console.anthropic.com/settings/keys.
+
+**1. Create a local cluster and build the image**
+```bash
+kind create cluster --name kubesage
+docker build -t kubesage:dev .
+kind load docker-image kubesage:dev --name kubesage
+```
+
+**2. Give KubeSage its API key and read-only permissions**
+```bash
+kubectl create secret generic kubesage-secrets \
+  --from-literal=anthropic-api-key="sk-ant-your-key"
+kubectl apply -f deploy/rbac.yaml
+kubectl apply -f deploy/deployment.yaml
+```
+
+**3. Break something on purpose, then watch KubeSage explain it**
+```bash
+kubectl apply -f deploy/demo-broken.yaml      # a crashlooping + an OOM pod
+kubectl logs -f deployment/kubesage           # watch the AI analysis appear
+```
+
+Within a poll cycle you'll see a root-cause analysis for each broken pod.
+
+**Run it outside the cluster instead** (uses your local kubeconfig — handy while
+developing in VS Code):
+```bash
+pip install -r requirements.txt
+export ANTHROPIC_API_KEY=sk-ant-your-key
+export RUN_ONCE=true
+python -m src.main
+```
+
+**Tear down:** `kind delete cluster --name kubesage`
+
+---
+
+## Part B — Deploy on AWS (the cloud story)
+
+> Heads-up on cost: an EKS cluster runs roughly **$0.10/hour for the control
+> plane plus the node**. Destroy it when you're done. This is a demo footprint,
+> not a production setup.
+
+**1. Provision infrastructure with Terraform**
+```bash
+cd terraform
+terraform init
+terraform apply        # creates VPC, EKS, ECR, SNS, and an IAM policy
+```
+Note the outputs (`ecr_repository_url`, `sns_topic_arn`, `configure_kubectl`).
+
+**2. Point kubectl at the cluster** — run the `configure_kubectl` output, e.g.
+```bash
+aws eks update-kubeconfig --region us-east-1 --name kubesage-demo
+```
+
+**3. Build and push the image** (or let the GitHub Actions workflow do it)
+```bash
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ecr_repository_url>
+docker build -t <ecr_repository_url>:latest .
+docker push <ecr_repository_url>:latest
+```
+
+**4. Deploy**, switching the AI backend to Bedrock so the whole pipeline is
+AWS-native (no external API key needed — the pod uses its IAM role via IRSA):
+- In `deploy/deployment.yaml`, set the `image:` to your ECR URL, set
+  `AI_PROVIDER` to `bedrock`, and add `AWS_REGION` / `SNS_TOPIC_ARN` env vars.
+- Bind the `kubesage` service account to the IAM policy Terraform created
+  (IRSA). See the EKS IRSA docs linked in the Terraform module output.
+```bash
+kubectl apply -f deploy/rbac.yaml
+kubectl apply -f deploy/deployment.yaml
+kubectl apply -f deploy/demo-broken.yaml
+```
+
+**Tear down (important):** `cd terraform && terraform destroy`
+
+---
+
+## Configuration (environment variables)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AI_PROVIDER` | `anthropic` | `anthropic` (API) or `bedrock` (AWS) |
+| `ANTHROPIC_API_KEY` | — | required when provider is `anthropic` |
+| `BEDROCK_MODEL_ID` | a Haiku id | copy the current id from the Bedrock console |
+| `WATCH_NAMESPACES` | `default` | comma-separated namespaces to monitor |
+| `POLL_INTERVAL_SECONDS` | `30` | how often to scan |
+| `SLACK_WEBHOOK_URL` | — | optional Slack alerts |
+| `SNS_TOPIC_ARN` | — | optional AWS SNS alerts |
+| `RUN_ONCE` | `false` | one pass then exit (for CronJob/local) |
+
+---
+
+## Monitoring & scheduling
+
+- **Metrics:** KubeSage exposes Prometheus metrics on `:8000/metrics`. Apply
+  `deploy/service.yaml` to make them scrapeable; see `monitoring/README.md` for
+  PromQL queries and Grafana panels.
+- **CronJob mode:** for a cheaper periodic scan instead of a long-lived pod,
+  apply `deploy/cronjob.yaml` (runs once every 5 min) instead of the Deployment.
+
+## Roadmap (good ways to extend it for your portfolio)
+- Pull historical metrics from CloudWatch to enrich the analysis.
+- Add a `--explain` CLI mode that analyzes one named pod on demand.
+- Auto-open a GitHub issue with the analysis for high-severity incidents.

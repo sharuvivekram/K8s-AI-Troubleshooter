@@ -1,0 +1,37 @@
+# Cheaper alternative to the Deployment: run a single pass on a schedule,
+# then exit. Good when you don't need second-by-second monitoring.
+# Apply this INSTEAD of deploy/deployment.yaml (both reuse rbac.yaml).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kubesage
+  namespace: default
+spec:
+  schedule: "*/5 * * * *"        # every 5 minutes
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          serviceAccountName: kubesage
+          restartPolicy: Never
+          containers:
+            - name: kubesage
+              image: kubesage:dev      # or your ECR image on AWS
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: RUN_ONCE
+                  value: "true"
+                - name: WATCH_NAMESPACES
+                  value: "default"
+                - name: AI_PROVIDER
+                  value: "anthropic"
+                - name: ANTHROPIC_API_KEY
+                  valueFrom:
+                    secretKeyRef: { name: kubesage-secrets, key: anthropic-api-key, optional: true }
+              resources:
+                requests: { cpu: "50m", memory: "128Mi" }
+                limits:   { cpu: "250m", memory: "256Mi" }

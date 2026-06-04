@@ -1,0 +1,19 @@
+# Exposes the Prometheus metrics endpoint. The annotations make annotation-based
+# Prometheus scrapers pick it up automatically. If you run the Prometheus
+# Operator instead, use a ServiceMonitor selecting app=kubesage on port "metrics".
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubesage-metrics
+  namespace: default
+  labels: { app: kubesage }
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  selector: { app: kubesage }
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: metrics
